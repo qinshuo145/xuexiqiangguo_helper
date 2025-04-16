@@ -267,12 +267,17 @@ def launch_xuexi_website():
     try:
         # 设置Edge选项
         edge_options = Options()
-        edge_options.add_argument("--headless")
+        edge_options.add_argument("--disable-logging")
+        edge_options.add_argument("--log-level=3")  # 只显示致命错误
         edge_options.add_argument("--disable-gpu")
         edge_options.add_argument("--window-size=1920,1080")
         edge_options.add_argument("--no-sandbox")
         edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--disable-extensions")
+        edge_options.add_argument("--disable-webgl")
+        edge_options.add_argument("--enable-unsafe-swiftshader")
+        edge_options.add_argument("--ignore-gpu-blacklist")
+        edge_options.add_argument("--headless=new")
         
         driver = webdriver.Edge(service=Service(EdgeChromiumDriverManager().install()), options=edge_options)
 
@@ -483,21 +488,6 @@ def watch_videos(driver, num_videos=6):
                             driver.execute_script("arguments[0].muted = true;", video_player)
                             print("已将视频设为静音模式")
                             
-                            # 确保视频开始播放
-                            driver.execute_script("arguments[0].play();", video_player)
-
-                            # 检查视频是否真的在播放
-                            is_playing = driver.execute_script(
-                                "return arguments[0].paused === false && arguments[0].currentTime > 0", 
-                                video_player
-                            )
-
-                            if not is_playing:
-                                print("视频未成功播放，尝试其他方法...")
-                                # 尝试点击播放按钮
-                                play_buttons = driver.find_elements(By.XPATH, "//div[contains(@class, 'play')]")
-                                if play_buttons:
-                                    play_buttons[0].click()
                     except Exception as e:
                         print(f"播放视频时出错: {e}")
 
@@ -530,29 +520,82 @@ def watch_videos(driver, num_videos=6):
         if len(driver.window_handles) > 0:
             driver.switch_to.window(driver.window_handles[0])
         return False
-
+    
 def check_score(driver):
     """
-    查看当前学习积分
+    查看当前学习积分，并返回文章和视频的积分状态
     """
     try:
         # 跳转到积分页面
-        print("正在查询学习积分...")
+        print("正在跳转到积分页面...")
         driver.get("https://pc.xuexi.cn/points/my-points.html")
         time.sleep(3)
-
-        # 等待积分元素加载
+        
+        # 等待积分数据加载
         WebDriverWait(driver, WAIT_TIMEOUT).until(
-            EC.presence_of_element_located((By.XPATH, "//div[@class='my-points-block']"))
+            EC.presence_of_element_located((By.CLASS_NAME, "my-points-content"))
         )
-
-        print("积分情况已加载，请查看浏览器窗口")
-        input("按Enter键继续...")
-        return True
+        
+        # 提取今日积分
+        try:
+            total_score_element = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".my-points-points.my-points-red"))
+            )
+            # 获取今日积分（不带 my-points-red 类的元素）
+            today_score_element = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".my-points-points:not(.my-points-red)"))
+            )
+            total_score = total_score_element.text
+            today_score = today_score_element.text
+            print(f"总积分: {total_score} 今日积分: {today_score}")
+        except Exception as e:
+            print(f"获取积分失败: {e}")
+        
+        # 提取各项积分详情
+        article_points = {'current': 0, 'target': 0}
+        video_points = {'current': 0, 'target': 0}
+        
+        try:
+            score_cards = driver.find_elements(By.CLASS_NAME, "my-points-card")
+            print("\n积分详情:")
+            for card in score_cards:
+                try:
+                    title = card.find_element(By.CLASS_NAME, "my-points-card-title").text
+                    progress = card.find_element(By.CLASS_NAME, "my-points-card-text").text
+                    print(f"- {title}: {progress}")
+                    
+                    # 提取文章和视频的积分情况
+                    if "阅读文章" in title:
+                        try:
+                            current, target = progress.split("/")
+                            article_points['current'] = int(current)
+                            article_points['target'] = int(target)
+                        except:
+                            print(f"解析文章积分失败: {progress}")
+                    elif "视频" in title and "时长" in title:
+                        try:
+                            current, target = progress.split("/")
+                            video_points['current'] = int(current)
+                            video_points['target'] = int(target)
+                        except:
+                            print(f"解析视频积分失败: {progress}")
+                except Exception as e:
+                    print(f"获取积分卡片详情失败: {e}")
+            
+            print("\n积分统计完成")
+        except Exception as e:
+            print(f"获取积分详情失败: {e}")
+        
+        return {
+            'article': article_points,
+            'video': video_points
+        }
     except Exception as e:
-        print(f"查询积分时发生错误: {e}")
-        return False
-
+        print(f"查看积分时发生错误: {e}")
+        return {
+            'article': {'current': 0, 'target': 0},
+            'video': {'current': 0, 'target': 0}
+        }
 
 def show_menu(driver):
     """
@@ -579,15 +622,51 @@ def show_menu(driver):
         elif choice == '3':
             check_score(driver)
         elif choice == '4':
-            num_articles = input("请输入要阅读的文章数量 (默认12篇): ").strip()
-            num_articles = int(num_articles) if num_articles.isdigit() else 12
-
-            num_videos = input("请输入要观看的视频数量 (默认12个): ").strip()
-            num_videos = int(num_videos) if num_videos.isdigit() else 12
-
-            read_articles(driver, num_articles)
-            watch_videos(driver, num_videos)
-            check_score(driver)
+            print("\n===== 开始全自动学习 =====")
+            
+            # 检查当前积分状态
+            print("正在检查当前积分状态...")
+            score_status = check_score(driver)
+            
+            # 计算所需的阅读文章和观看视频数量
+            article_target = score_status['article']['target']
+            article_current = score_status['article']['current']
+            article_remaining = max(0, article_target - article_current)
+            
+            video_target = score_status['video']['target']
+            video_current = score_status['video']['current']
+            video_remaining = max(0, video_target - video_current)
+            
+            # 自动完成文章阅读任务
+            if article_remaining <= 0:
+                print(f"\n文章学习积分已满: {article_current}/{article_target}，无需阅读文章")
+            else:
+                # 自动计算需要阅读的文章数量（多读2篇确保达标）
+                num_articles = article_remaining + 2
+                print(f"\n文章学习积分未满: {article_current}/{article_target}，将阅读{num_articles}篇文章")
+                read_articles(driver, num_articles)
+            
+            # 自动完成视频观看任务
+            if video_remaining <= 0:
+                print(f"\n视频学习积分已满: {video_current}/{video_target}，无需观看视频")
+            else:
+                # 自动计算需要观看的视频数量（多看2个确保达标）
+                num_videos = video_remaining + 2
+                print(f"\n视频学习积分未满: {video_current}/{video_target}，将观看{num_videos}个视频")
+                watch_videos(driver, num_videos)
+            
+            # 最后检查积分状态
+            print("\n===== 学习任务完成，最终积分状态 =====")
+            final_status = check_score(driver)
+            
+            # 检查是否所有任务都已完成
+            final_article_remaining = max(0, final_status['article']['target'] - final_status['article']['current'])
+            final_video_remaining = max(0, final_status['video']['target'] - final_status['video']['current'])
+            
+            if final_article_remaining > 0 or final_video_remaining > 0:
+                print("\n⚠️ 部分积分未达标，可能需要重新运行或手动完成")
+            else:
+                print("\n✅ 所有学习任务已完成！")
         elif choice == '0':
             print("正在退出程序...")
             break
@@ -596,10 +675,16 @@ def show_menu(driver):
 
 if __name__ == "__main__":
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-    "--disable-logging "  # 禁用所有日志（激进）
-    "--log-level=0 "      # 只显示 FATAL 错误（推荐）
-    "--disable-features=EdgeQQBrowserImporter "  # 禁用 QQ 浏览器检测
-    "--ignore-certificate-errors "  # 忽略 SSL 错误（不安全，仅调试）
-    "--vmodule=*/ssl/*=0,*/qqbrowser/*=0,*/gpu/*=0"
-)
+        "--disable-logging "  # 禁用所有日志（激进）
+        "--log-level=0 "      # 只显示 FATAL 错误（推荐）
+        "--disable-features=EdgeQQBrowserImporter "  # 禁用 QQ 浏览器检测
+        "--ignore-certificate-errors "  # 忽略 SSL 错误（不安全，仅调试）
+        "--enable-unsafe-swiftshader "  # 启用 SwiftShader 以解决相关错误
+        "--disable-dev-shm-usage "      # 解决共享内存问题
+        "--disable-gpu-sandbox "        # 禁用 GPU 沙箱
+        "--disable-software-rasterizer " # 禁用软件光栅化
+        "--disable-webgl "              # 直接禁用 WebGL 功能
+        "--disable-gl-extensions "      # 禁用 GL 扩展
+        "--vmodule=*/ssl/*=0,*/qqbrowser/*=0,*/gpu/*=0,*/gl_*=0,*/gles2*=0,*/webgl*=0,*/viz*=0 "  # 细化禁用日志模块
+    )
     launch_xuexi_website()
