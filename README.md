@@ -1,0 +1,2 @@
+# xuexiqiangguo_helper
+一个用来学习强国自动读文章和看视频刷分的简单脚本
