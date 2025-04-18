@@ -1,3 +1,4 @@
+import logging
 import random
 import time
 import os
@@ -6,6 +7,7 @@ import json
 import pickle
 import base64
 from io import BytesIO
+
 from PIL import Image
 
 from selenium import webdriver
@@ -51,33 +53,26 @@ def extract_login_qrcode(driver, output_path=None):
         # 查找二维码图片元素
         try:
             element = wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="app"]/div/div[1]/div/div[1]/div[1]/img')))
-            #print("找到二维码元素")
             
             # 获取图片元素的src属性
             src = element.get_attribute('src')
-            #print(f"图片src属性长度: {len(src) if src else 0}")
             
             # 提取base64编码部分
             if src and 'base64,' in src:
                 # 分割字符串，获取base64编码部分
                 base64_data = src.split('base64,')[1]
-                #print(f"成功提取base64编码，长度: {len(base64_data)}")
                 
                 # 解码base64数据
                 img_data = base64.b64decode(base64_data)
                 
                 # 使用PIL处理图片
                 img = Image.open(BytesIO(img_data))
-                #print(f"图片尺寸: {img.size}")
                 
                 # 保存图片
                 img.save(output_path)
-                #print(f"二维码已保存至: {output_path}")
-
                 
                 # 验证文件是否存在
                 if os.path.exists(output_path):
-                    #print("图片文件保存成功并且可以访问")
                     return output_path
             else:
                 print("图片元素不包含base64编码的数据")
@@ -101,119 +96,6 @@ def extract_login_qrcode(driver, output_path=None):
             pass
     
     return None
-
-def save_cookies(driver, filename='xuexi_cookies.pkl'):
-    """
-    保存当前浏览器会话的cookies到文件
-    """
-    # 创建存储目录
-    os.makedirs(os.path.dirname(os.path.abspath(filename)) if os.path.dirname(filename) else '.', exist_ok=True)
-    
-    # 获取所有cookies
-    cookies = driver.get_cookies()
-    
-    # 保存到文件
-    with open(filename, 'wb') as f:
-        pickle.dump(cookies, f)
-    
-    print(f"已保存登录状态到 {filename}")
-    
-    # 同时保存cookie信息和时间戳
-    cookie_info = {
-        'save_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'cookie_count': len(cookies),
-        'domains': list(set(cookie.get('domain', 'unknown') for cookie in cookies if 'domain' in cookie))
-    }
-    
-    with open(f"{filename}.json", 'w', encoding='utf-8') as f:
-        json.dump(cookie_info, f, ensure_ascii=False, indent=2)
-
-def load_cookies(driver, filename='xuexi_cookies.pkl', max_age_days=7):
-    """
-    从文件加载cookies到当前浏览器会话
-    返回是否成功加载cookies
-    """
-    # 检查cookie文件是否存在
-    if not os.path.exists(filename):
-        print("未找到已保存的登录状态")
-        return False
-    
-    # 检查cookie是否过期
-    try:
-        # 获取文件修改时间
-        file_time = os.path.getmtime(filename)
-        file_age = (time.time() - file_time) / 86400  # 转换为天
-        
-        if file_age > max_age_days:
-            print(f"已保存的登录状态已过期 ({int(file_age)}天前保存)")
-            return False
-            
-        # 加载cookies
-        with open(filename, 'rb') as f:
-            cookies = pickle.load(f)
-        
-        # 按域名分组cookies
-        cookies_by_domain = {}
-        for cookie in cookies:
-            domain = cookie.get('domain', '')
-            if domain not in cookies_by_domain:
-                cookies_by_domain[domain] = []
-            cookies_by_domain[domain].append(cookie)
-        
-        # 先访问学习强国主域名
-        driver.get("https://www.xuexi.cn")
-        time.sleep(1)
-        
-        # 按域名添加cookies
-        success_count = 0
-        for domain, domain_cookies in cookies_by_domain.items():
-            # 尝试访问与cookie域名匹配的页面
-            try:
-                # 提取域名的主要部分并访问
-                base_domain = domain.lstrip('.')
-                if base_domain and '.' in base_domain:  # 确保是有效域名
-                    protocol = "https://" if not base_domain.startswith("http") else ""
-                    # 构建URL并访问该域
-                    url = f"{protocol}{base_domain}"
-                    #print(f"访问域名 {url} 以设置相关cookie...")
-                    driver.get(url)
-                    time.sleep(1)
-                
-                # 添加该域的cookies
-                for cookie in domain_cookies:
-                    try:
-                        # 修复可能的cookie格式问题
-                        if 'expiry' in cookie:
-                            cookie['expiry'] = int(cookie['expiry'])
-                        
-                        # 确保domain与当前页面匹配
-                        current_domain = driver.current_url.split('//')[1].split('/')[0]
-                        if domain.endswith(current_domain) or current_domain.endswith(domain.lstrip('.')):
-                            driver.add_cookie(cookie)
-                            success_count += 1
-                        else:
-                            print(f"跳过不匹配的cookie: {cookie.get('name')} (域名: {domain} vs 当前: {current_domain})")
-                    except Exception as e:
-                        print(f"添加cookie时出错 [{cookie.get('name')}]: {str(e).split('Stacktrace')[0].strip()}")
-            except Exception as e:
-                print(f"访问域名 {domain} 时出错: {e}")
-        
-        # 重新访问学习强国主页
-        driver.get("https://www.xuexi.cn")
-        time.sleep(2)
-        
-        # 验证登录状态
-        current_url = driver.current_url
-        if "login.html" in current_url:
-            print("使用已保存的登录状态失败")
-            return False
-        
-        #print(f"已成功添加 {success_count}/{len(cookies)} 个cookies，自动登录成功！")
-        return True
-        
-    except Exception as e:
-        print(f"加载登录状态时出错: {e}")
-        return False
 
 def wait_for_login(driver):
     """
@@ -274,31 +156,25 @@ def launch_xuexi_website():
         # 初始化WebDriver
         driver = webdriver.Edge(service=Service(EdgeChromiumDriverManager().install()), options=edge_options)
 
-        # 尝试使用已保存的cookies登录
-        login_success = load_cookies(driver)
+        # 打开学习强国登录页面
+        print("正在打开学习强国登录页面...")
+        driver.get("https://pc.xuexi.cn/points/login.html")
+
+        print("页面已打开，请扫描二维码登录...")
+        output_path = extract_login_qrcode(driver)
+        img = Image.open(output_path)
+        img.show()
         
-        # 如果自动登录失败，则转向正常登录流程
-        if not login_success:
-            # 打开学习强国登录页面
-            print("正在打开学习强国登录页面...")
-            driver.get("https://pc.xuexi.cn/points/login.html")
-
-            print("页面已打开，请扫描二维码登录...")
-            output_path=extract_login_qrcode(driver)
-            img = Image.open(output_path)
-            img.show()
-            # 等待用户登录成功
-            if wait_for_login(driver):
-                # 登录成功后保存cookies
-                save_cookies(driver)
-                os.remove(output_path)
-            else:
-                print("登录失败")
-                driver.quit()
-                return
-
-        # 显示功能菜单并处理用户选择
-        show_menu(driver)
+        # 等待用户登录成功
+        if wait_for_login(driver):
+            # 登录成功后删除二维码图片
+            os.remove(output_path)
+            # 显示功能菜单并处理用户选择
+            show_menu(driver)
+        else:
+            print("登录失败")
+            driver.quit()
+            return
 
     except Exception as e:
         print(f"发生错误: {e}")
@@ -308,9 +184,14 @@ def launch_xuexi_website():
             driver.quit()
             print("浏览器已关闭")
 
-def read_articles(driver, num_articles=6):
+def read_articles(driver, num_articles=6, start_index=0):
     """
     阅读文章获取积分
+    
+    参数：
+        driver: WebDriver实例
+        num_articles: 要阅读的文章数量
+        start_index: 从文章列表的第几篇文章开始阅读
     """
     try:
         # 跳转到新闻页面
@@ -325,7 +206,7 @@ def read_articles(driver, num_articles=6):
 
         # 阅读指定数量的文章
         read_count = min(len(article_links), num_articles)
-        print(f"找到{len(article_links)}篇文章，计划阅读{read_count}篇")
+        print(f"找到{len(article_links)}篇文章，计划阅读{read_count}篇，从第{start_index+1}篇开始")
 
         for i in range(read_count):
             # 重新获取文章列表，避免StaleElementReferenceException
@@ -333,8 +214,12 @@ def read_articles(driver, num_articles=6):
                 EC.presence_of_all_elements_located((By.XPATH, "//div[@class='text-link-item-title']"))
             )
 
-            print(f"正在阅读第 {i+1}/{read_count} 篇文章")
-            article_links[i].click()
+            # 计算实际的文章索引，使用模运算确保不会超出范围
+            actual_index = (i + start_index) % len(article_links)
+            print(f"正在阅读第 {actual_index+1}/{len(article_links)} 篇文章")
+            
+            # 点击对应索引的文章
+            article_links[actual_index].click()
 
             # 切换到新窗口
             driver.switch_to.window(driver.window_handles[-1])
@@ -361,13 +246,17 @@ def read_articles(driver, num_articles=6):
         print(f"阅读文章时发生错误: {e}")
         return False
 
-def watch_videos(driver, num_videos=6):
+def watch_videos(driver, num_videos=6, start_index=0):
     """
     观看视频获取积分
+    
+    参数：
+        driver: WebDriver实例
+        num_videos: 要观看的视频数量
+        start_index: 从视频列表的第几个视频开始观看
     """
     try:
-        # 跳转到视频页面 - 使用百灵视频页面
-        print("正在跳转到视频页面...")
+        #print("正在跳转到视频页面...")
         driver.get("https://www.xuexi.cn/4426aa87b0b64ac671c96379a3a8bd26/db086044562a57b441c24f2af1c8e101.html")
         time.sleep(3)
 
@@ -408,7 +297,7 @@ def watch_videos(driver, num_videos=6):
 
         # 观看指定数量的视频
         watch_count = min(len(video_links), num_videos)
-        print(f"找到{len(video_links)}个视频，计划观看{watch_count}个")
+        print(f"计划观看{watch_count}个视频，从第{start_index+1}个开始")
 
         for i in range(watch_count):
             # 重新获取视频列表，使用成功的选择器
@@ -422,7 +311,9 @@ def watch_videos(driver, num_videos=6):
                         EC.presence_of_all_elements_located((By.CSS_SELECTOR, current_selector["value"]))
                     )
                 
-                print(f"正在观看第 {i+1}/{watch_count} 个视频")
+                # 计算实际的视频索引，使用模运算确保不会超出范围
+                actual_index = (i + start_index) % len(video_links)
+                print(f"正在观看第 {actual_index+1}/{len(video_links)} 个视频")
                 
                 # 确保元素可点击，使用当前选择器
                 try:
@@ -437,18 +328,18 @@ def watch_videos(driver, num_videos=6):
                 except Exception as e:
                     print(f"等待元素可点击时出错: {e}")
                 
-                # 使用JavaScript点击元素可能更可靠
+                # 使用JavaScript点击元素可能更可靠，注意使用actual_index
                 try:
-                    driver.execute_script("arguments[0].click();", video_links[i])
+                    driver.execute_script("arguments[0].click();", video_links[actual_index])
                 except Exception as e:
                     print(f"点击视频时出错，尝试替代方法: {e}")
                     try:
-                        video_links[i].click()
+                        video_links[actual_index].click()
                     except:
                         print("替代点击方法也失败，跳过此视频")
                         continue
 
-                # 切换到新窗口
+                # 切换到新窗口及后续代码保持不变
                 try:
                     if len(driver.window_handles) > 1:
                         driver.switch_to.window(driver.window_handles[-1])
@@ -491,7 +382,7 @@ def watch_videos(driver, num_videos=6):
                             )
 
                             if not is_playing:
-                                print("视频未成功播放，尝试其他方法...")
+                                print("视频开始播放")
                                 # 尝试点击播放按钮
                                 play_buttons = driver.find_elements(By.XPATH, "//div[contains(@class, 'play')]")
                                 if play_buttons:
@@ -529,27 +420,97 @@ def watch_videos(driver, num_videos=6):
             driver.switch_to.window(driver.window_handles[0])
         return False
 
-def check_score(driver):
+def check_score(driver, verbose=False):
     """
-    查看当前学习积分
+    查看当前学习积分，并返回文章和视频的积分状态
+    verbose: 是否显示详细信息
     """
     try:
         # 跳转到积分页面
-        print("正在查询学习积分...")
+        print("正在检查积分状态...")
         driver.get("https://pc.xuexi.cn/points/my-points.html")
         time.sleep(3)
 
-        # 等待积分元素加载
+        # 等待积分数据加载
         WebDriverWait(driver, WAIT_TIMEOUT).until(
-            EC.presence_of_element_located((By.XPATH, "//div[@class='my-points-block']"))
+            EC.presence_of_element_located((By.CLASS_NAME, "my-points-content"))
         )
 
-        print("积分情况已加载，请查看浏览器窗口")
-        input("按Enter键继续...")
-        return True
+        # 提取各项积分详情
+        article_points = {'current': 0, 'target': 12}
+        video_points = {'current': 0, 'target': 12}
+
+        try:
+            score_cards = driver.find_elements(By.CLASS_NAME, "my-points-card")
+
+            if verbose:
+                print(f"\n积分详情: 找到 {len(score_cards)} 个积分卡片")
+
+            # 只有在详细模式下才打印所有卡片
+            if verbose:
+                print("\n所有积分卡片标题:")
+                for i, card in enumerate(score_cards):
+                    try:
+                        title = card.find_element(By.CLASS_NAME, "my-points-card-title").text
+                        progress = card.find_element(By.CLASS_NAME, "my-points-card-text").text
+                        print(f"{i + 1}. {title}: {progress}")
+                    except:
+                        pass
+
+            # 解析积分详情
+            for card in score_cards:
+                try:
+                    title = card.find_element(By.CLASS_NAME, "my-points-card-title").text
+                    progress = card.find_element(By.CLASS_NAME, "my-points-card-text").text
+
+                    # 提取文章和视频的积分情况
+                    if "选读文章" in title or "阅读文章" in title or "我要选读文章" in title:
+                        try:
+                            current, target = progress.split("/")
+                            # 移除非数字字符再转换
+                            current_clean = ''.join(filter(str.isdigit, current))
+                            target_clean = ''.join(filter(str.isdigit, target))
+
+                            article_points['current'] = int(current_clean)
+                            article_points['target'] = int(target_clean)
+                        except Exception as e:
+                            if verbose:
+                                print(f"解析文章积分失败: {progress}, 错误: {e}")
+                    elif ("视听学习" in title or "视频" in title) and (
+                            "时长" in title or "分钟" in title or "我要" in title):
+                        try:
+                            current, target = progress.split("/")
+                            # 移除非数字字符再转换
+                            current_clean = ''.join(filter(str.isdigit, current))
+                            target_clean = ''.join(filter(str.isdigit, target))
+
+                            video_points['current'] = int(current_clean)
+                            video_points['target'] = int(target_clean)
+                        except Exception as e:
+                            if verbose:
+                                print(f"解析视频积分失败: {progress}, 错误: {e}")
+                except Exception as e:
+                    if verbose:
+                        print(f"获取积分卡片详情失败: {e}")
+
+            # 简洁的积分汇总
+            print(f"积分进度: 文章 {article_points['current']}/{article_points['target']} | " +
+                        f"视频 {video_points['current']}/{video_points['target']}")
+        except Exception as e:
+            if verbose:
+                print(f"获取积分详情失败: {e}")
+
+        return {
+            'article': article_points,
+            'video': video_points
+        }
     except Exception as e:
-        print(f"查询积分时发生错误: {e}")
-        return False
+        if verbose:
+            print(f"查看积分时发生错误: {e}")
+        return {
+            'article': {'current': 0, 'target': 12},
+            'video': {'current': 0, 'target': 12}
+        }
 
 def show_menu(driver):
     """
@@ -576,15 +537,54 @@ def show_menu(driver):
         elif choice == '3':
             check_score(driver)
         elif choice == '4':
-            num_articles = input("请输入要阅读的文章数量 (默认12篇): ").strip()
-            num_articles = int(num_articles) if num_articles.isdigit() else 12
-
-            num_videos = input("请输入要观看的视频数量 (默认12个): ").strip()
-            num_videos = int(num_videos) if num_videos.isdigit() else 12
-
-            read_articles(driver, num_articles)
-            watch_videos(driver, num_videos)
-            check_score(driver)
+            print("\n===== 开始全自动学习 =====")
+        
+            # 初始化检查积分状态
+            score_status = check_score(driver, verbose=False)
+        
+            # 持续检查直到所有任务完成
+            while True:
+                # 计算所需的阅读文章和观看视频数量
+                article_target = score_status['article']['target']
+                article_current = score_status['article']['current']
+                article_remaining = max(0, article_target - article_current)
+        
+                video_target = score_status['video']['target']
+                video_current = score_status['video']['current']
+                video_remaining = max(0, video_target - video_current)
+        
+                # 显示完成百分比
+                article_percent = min(100, int(article_current / article_target * 100))
+                video_percent = min(100, int(video_current / video_target * 100))
+                print(f"当前进度: 文章 {article_percent}% | 视频 {video_percent}%")
+        
+                # 如果两种任务都已完成，退出循环
+                if article_remaining <= 0 and video_remaining <= 0:
+                    print("✅ 所有学习任务已完成！")
+                    break
+        
+                # 自动完成文章阅读任务，从已阅读的文章数量开始
+                if article_remaining > 0:
+                    batch_articles = min(6, article_remaining)
+                    # 传递已获得的文章积分作为起始索引
+                    read_articles(driver, batch_articles, article_current)
+        
+                # 简短地检查积分状态
+                score_status = check_score(driver, verbose=False)
+        
+                # 如果已完成所有任务，提前退出
+                if score_status['article']['current'] >= article_target and score_status['video']['current'] >= video_target:
+                    print("✅ 所有学习任务已完成！")
+                    break
+        
+                # 自动完成视频观看任务，从已观看的视频数量开始
+                if video_remaining > 0:
+                    batch_videos = min(6, video_remaining)
+                    # 传递已获得的视频积分作为起始索引
+                    watch_videos(driver, batch_videos, video_current)
+        
+                # 再次检查积分状态
+                score_status = check_score(driver, verbose=False)
         elif choice == '0':
             print("正在退出程序...")
             break
