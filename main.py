@@ -154,7 +154,10 @@ def launch_xuexi_website():
         edge_options.add_argument("--window-size=1920,1080")
 
         # 初始化WebDriver
-        driver = webdriver.Edge(service=Service(EdgeChromiumDriverManager().install()), options=edge_options)
+        driver = webdriver.Edge(service=Service(EdgeChromiumDriverManager(
+            url="https://msedgedriver.microsoft.com/",
+            latest_release_url="https://msedgedriver.microsoft.com/LATEST_RELEASE")
+            .install()), options=edge_options)
 
         # 打开学习强国登录页面
         print("正在打开学习强国登录页面...")
